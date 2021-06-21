@@ -41,8 +41,23 @@ actor IrcClientSession
     end
 
 
+  // CAP LS
+  // NICK red
+  // USER red red localhost :Unknown
+
   // Process the incoming line
   be incoming_line(conn: TCPConnection, line: String iso, times: USize) =>
-    Debug.out("<[" + (digestof this).string() + "]" + consume line)
+    match consume line
+    | let l: String iso if (l.substring(0,5) == "NICK ") =>
+      try
+        ircnick = l.split(" ").apply(1)?
+      end
+    | let l: String iso if (l.substring(0,5) == "USER ") =>
+      let uarray: Array[String] = l.split_by(" ")
+      try
+        ircuser = uarray.apply(1)?
+      end
+    | let l: String iso => Debug.out("<[" + (digestof this).string() + "]" + consume l)
+    end
 
 
