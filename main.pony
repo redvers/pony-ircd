@@ -1,6 +1,7 @@
 use "net"
 use "debug"
 use "buffered"
+use "matrixclient"
 
 actor Main
   new create(env: Env) =>
