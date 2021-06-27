@@ -36,7 +36,9 @@ class IrcClientPlumbing is TCPConnectionNotify
 
   // Connection has been made, sending the server MOTD
   fun ref accepted(conn: TCPConnection): None =>
-    clientactor.motd(conn)
+    conn.write(":matrixproxy NOTICE * :How about a nice introduction before we start?\r\n")
+//    clientactor.intro(conn)
+//    clientactor.motd(conn)
 
   // Received a chunk of network data...
   fun ref received(
