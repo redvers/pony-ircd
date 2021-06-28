@@ -15,27 +15,33 @@ actor IrcClientSession
   var readerBuffer: Reader ref = Reader // Used to break data into
                                         // line-based events.
   let timers: Timers = Timers
+  let conn: TCPConnection
 
-  new create() =>
-    None
 
-  be intro(conn: TCPConnection) =>
-    conn.write(":matrixproxy 001 " + ircnick + " :Welcome to the matrixproxy " + ircnick + "!" + ircuser + "\r\n")
-    conn.write(":matrixproxy 002 " + ircnick + " :Your host is matrixproxy\r\n")
-    conn.write(":matrixproxy 003 " + ircnick + " :This server was created just now\r\n")
-    conn.write(":matrixproxy 375 " + ircnick + " :- matrixproxy Message of the day -\r\n")
-    conn.write(":matrixproxy 372 " + ircnick + " :- Please await instructions...\r\n")
-    conn.write(":matrixproxy 376 " + ircnick + " :End of message of the day.\r\n")
+  new create(conn': TCPConnection) =>
+    conn = conn'
+
+  be send_data(line: String) =>
+    Debug.out(">> " + line.clone())
+    conn.write(line + "\r\n")
+
+  be intro() =>
+    send_data(":matrixproxy 001 " + ircnick + " :Welcome to the matrixproxy " + ircnick + "!" + ircuser)
+    send_data(":matrixproxy 002 " + ircnick + " :Your host is matrixproxy")
+    send_data(":matrixproxy 003 " + ircnick + " :This server was created just now")
+    send_data(":matrixproxy 375 " + ircnick + " :- matrixproxy Message of the day -")
+    send_data(":matrixproxy 372 " + ircnick + " :- Please await instructions...")
+    send_data(":matrixproxy 376 " + ircnick + " :End of message of the day.")
 
     let thistag: IrcClientSession tag = this
-    let timer: Timer iso = Timer(PNotify(thistag, conn), 5_000_000_000, 20_000_000_000)
+    let timer: Timer iso = Timer(PNotify(thistag), 5_000_000_000, 20_000_000_000)
     timers(consume timer)
 
-  be sendping(conn: TCPConnection) =>
-    conn.write("PING something\r\n")
+  be sendping() =>
+    send_data("PING something")
 
 
-  be recv_data(conn: TCPConnection, data: Array[U8] iso, times: USize) =>
+  be recv_data(data: Array[U8] iso, times: USize) =>
     var dstring: String iso = String.from_iso_array(consume data)
     // Append the block of data to our Reader buffer
     readerBuffer.append(consume dstring)
@@ -46,7 +52,7 @@ actor IrcClientSession
         let line: String iso = readerBuffer.line()?
 
         // Send that line to myself as an asych message
-        incoming_line(conn, consume line, times)
+        incoming_line(consume line, times)
       else
         // If there isn't a full line of text available, we
         // break out of the while true loop.
@@ -54,25 +60,15 @@ actor IrcClientSession
       end
     end
 
-
-  // CAP LS
-  // NICK red
-  // USER red red localhost :Unknown
-
   // Process the incoming line
-  be incoming_line(conn: TCPConnection, line: String iso, times: USize) =>
-    Debug.out(">> " + line.clone())
+  be incoming_line(line: String iso, times: USize) =>
+    Debug.out("<< " + line.clone())
     match consume line
-//    | let l: String iso if (l.substring(0,18) == "PRIVMSG localhost ") =>
-//      try
-//        let token: String = l.split(" ").apply(2)?
-//        Debug.out("Got matrix token: " + token)
-//        conn.write("PRIVMSG bob!bob@localhost :" + token + "\r\n")
-//      end
+    | let l: String iso if (l.substring(0,5) == "PONG ") => None
     | let l: String iso if (l.substring(0,5) == "PING ") =>
       try
         let replystr: String = l.split(" ").apply(1)?
-        conn.write("PONG " + replystr + "\r\n")
+        send_data("PONG " + replystr)
       end
     | let l: String iso if (l.substring(0,5) == "NICK ") =>
       try
@@ -83,23 +79,14 @@ actor IrcClientSession
       try
         ircuser = uarray.apply(1)? + "@" + uarray.apply(2)?
         ircnick = uarray.apply(1)?
-        this.intro(conn)
+        this.intro()
       end
-//    | let l: String iso if (l.substring(0,5) == "JOIN ") =>
-//      let uarray: Array[String] = l.split_by(" ")
-//      try
-//        let newchan: String = uarray.apply(1)?
-//        conn.write(":" + ircnick + "!" + ircuser + " JOIN :" + newchan + "\r\n")
-//        conn.write(":localhost 353 " + ircnick + " = " + newchan + ":Some New Users\r\n")
-//        conn.write(":localhost 366 " + ircnick + " = " + newchan + ":End of /NAMES list\r\n")
-//      end
     | let l: String iso if (l.substring(0,8) == "USERHOST") =>
       let uarray: Array[String] = l.split_by(" ")
       try
-        if(uarray.apply(1)? == ircuser) then
+        if(uarray.apply(1)? == ircnick) then
           // lkjhlkjhlikjh=+~red@cpe-69-132-182-159.carolina.res.rr.com
-          conn.write(":matrixproxy 302 " + ircnick + "=+" + ircuser + "\r\n")
-//          conn.write(":localhost 318 " + ircnick + " " + ircnick + ":End of /WHOIS list.\r\n")
+          send_data(":matrixproxy 302 " + ircnick + " :" + ircnick + "=+" + ircuser)
         end
       end
     | let l: String iso => Debug.out("<[" + (digestof this).string() + "]" + consume l)
@@ -108,12 +95,10 @@ actor IrcClientSession
 
 class PNotify is TimerNotify
   let itag: IrcClientSession tag
-  let conn: TCPConnection
 
-  new iso create(itag': IrcClientSession tag, conn': TCPConnection) =>
-    conn = conn'
+  new iso create(itag': IrcClientSession tag) =>
     itag = itag'
 
   fun ref apply(timer: Timer, count: U64): Bool =>
-    itag.sendping(conn)
+    itag.sendping()
     true

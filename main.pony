@@ -32,10 +32,11 @@ class PlaintextTCPListener is TCPListenNotify
  * terminated I'm passing the data into the dedicated IrcClientSession
  * actor.                                                             */
 class IrcClientPlumbing is TCPConnectionNotify
-  var clientactor: IrcClientSession tag = IrcClientSession
+  var clientactor: (IrcClientSession tag|None) =  None // IrcClientSession(conn)
 
   // Connection has been made, sending the server MOTD
   fun ref accepted(conn: TCPConnection): None =>
+    clientactor = IrcClientSession(conn)
     conn.write(":matrixproxy NOTICE * :How about a nice introduction before we start?\r\n")
 //    clientactor.intro(conn)
 //    clientactor.motd(conn)
@@ -48,7 +49,9 @@ class IrcClientPlumbing is TCPConnectionNotify
     : Bool
   =>
     // Sending the block of data to the dedicated actor
-    clientactor.recv_data(conn, consume data, times)
+    match clientactor
+    | let x: IrcClientSession tag => x.recv_data(consume data, times)
+    end
     true
 
   fun ref connect_failed(conn: TCPConnection ref) =>
