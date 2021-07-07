@@ -2,6 +2,8 @@ use "net"
 use "time"
 use "debug"
 use "buffered"
+use "collections"
+use "matrixclient"
 
 primitive PendingIRCAuth
 primitive PendingMatrixAuth
@@ -9,6 +11,7 @@ primitive FullyAuthed
 type ClientState is (PendingIRCAuth | PendingMatrixAuth | FullyAuthed)
 
 actor IrcClientSession
+  var auth: AmbientAuth
   var ircnick: String = ""  // Nickname
   var ircuser: String = ""  // The user@host
   var userstate: ClientState = PendingIRCAuth  // FSMesque
@@ -17,9 +20,55 @@ actor IrcClientSession
   let timers: Timers = Timers
   let conn: TCPConnection
 
+  var matrixclient: (MatrixClient|None) = None
 
-  new create(conn': TCPConnection) =>
+
+  new create(conn': TCPConnection, auth': AmbientAuth) =>
+    auth = auth'
     conn = conn'
+
+
+  be connect_matrix(token: String val) =>
+    matrixclient = MatrixClient(auth, "https://evil.red:8448", token)
+    var thistag: IrcClientSession tag = this
+    match matrixclient
+    | let mc: None => None
+    | let mc: MatrixClient => mc.whoami(thistag~gotwhoami())
+    end
+
+
+  be gotwhoami(decoder: DecodeType val, json: String) =>
+    Debug.out("Got whoami")
+    try
+      let uid: String = (decoder as WhoAmI val).apply(json)?
+      send_data(":matrixproxy!matrixproxy@matrixproxy PRIVMSG " + ircnick + " :You are now logged in via matrix user: " + uid)
+      this.initialsync()
+    else
+      send_data(":matrixproxy!matrixproxy@matrixproxy PRIVMSG " + ircnick + " :Your token appears to be invalid. Sucks to be you")
+    end
+
+  be initialsync() =>
+    var thistag: IrcClientSession tag = this
+    match matrixclient
+    | let mc: None => None
+    | let mc: MatrixClient => mc.sync(thistag~gotinitialsync())
+    end
+
+
+  be gotinitialsync(decoder: DecodeType val, json: String) =>
+   try
+//     match decoder
+ //    | let x: MSync val => send_data(":matrixproxy!matrixproxy@matrixproxy PRIVMSG " + ircnick + " :MSStart of channel list")
+ //    end
+     (let aliasmap: Map[String, String], let nb: String) = (decoder as MSync val).apply(json)?
+     for f in aliasmap.keys() do
+       send_data(":matrixproxy!matrixproxy@matrixproxy PRIVMSG " + ircnick + " :" + f)
+     end
+     send_data(":matrixproxy!matrixproxy@matrixproxy PRIVMSG " + ircnick + " :End of channel list")
+   else
+     send_data(":matrixproxy!matrixproxy@matrixproxy PRIVMSG " + ircnick + " :" + "Failed in gotinitialsync")
+     send_data(":matrixproxy!matrixproxy@matrixproxy PRIVMSG " + ircnick + " :" + json)
+   end
 
   be send_data(line: String) =>
     Debug.out(">> " + line.clone())
@@ -32,6 +81,9 @@ actor IrcClientSession
     send_data(":matrixproxy 375 " + ircnick + " :- matrixproxy Message of the day -")
     send_data(":matrixproxy 372 " + ircnick + " :- Please await instructions...")
     send_data(":matrixproxy 376 " + ircnick + " :End of message of the day.")
+    send_data(":matrixproxy!matrixproxy@matrixproxy PRIVMSG " + ircnick + " :Please send me your matrix token")
+    send_data(":matrixproxy!matrixproxy@matrixproxy PRIVMSG " + ircnick + " :/msg matrixproxy HELP for help")
+    send_data(":matrixproxy!matrixproxy@matrixproxy PRIVMSG " + ircnick + " :/msg matrixproxy TOKEN <token> to connect to Matrix")
 
     let thistag: IrcClientSession tag = this
     let timer: Timer iso = Timer(PNotify(thistag), 5_000_000_000, 20_000_000_000)
@@ -60,10 +112,30 @@ actor IrcClientSession
       end
     end
 
+  be privmsg(line: String iso) =>
+    Debug.out("Got me a privmsg line: " + consume line)
+
+  be botmessage(line: String val) =>
+//    let l: Array[String] = line.split(" ")
+    try
+      match line.split(" ").apply(2)?
+      | let l: String val if (l == ":TOKEN") =>
+        connect_matrix(line.split(" ").apply(3)?)
+      end
+    end
+
   // Process the incoming line
   be incoming_line(line: String iso, times: USize) =>
     Debug.out("<< " + line.clone())
     match consume line
+    | let l: String iso if (l.substring(0,8) == "PRIVMSG ") =>
+      try
+        match l.split(" ").apply(1)?
+        | let nick: String if (nick.lower() == "matrixproxy") =>
+            this.botmessage(consume l)
+        | let x: String => this.privmsg(consume l)
+      end
+    end
     | let l: String iso if (l.substring(0,5) == "PONG ") => None
     | let l: String iso if (l.substring(0,5) == "PING ") =>
       try
